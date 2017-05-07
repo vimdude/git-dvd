@@ -1,0 +1,94 @@
+#!/bin/bash
+#
+# Copyright (C) 2017  Abdel Said <tafnzart@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify it under the terms of version 3 of the GNU
+# General Public License as published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+#
+set -e
+
+function bail_out {
+  echo "error: $1" >&2   ## Send message to stderr
+  exit "${2:-1}"  ## Return a code specified by $2 or 1 by default.
+}
+
+function wait_msg {
+  echo "error: $1" 
+  sleep 2
+}
+
+if ! [ -x "$(command -v dvd+rw-mediainfo)" ]; then
+  bail_out "command dvd+rw-mediainfo not installed."
+fi
+
+while true; do
+  echo "Step 1: getting size for next dvd"
+  dvdsize=`dvd+rw-mediainfo /dev/sr0 2>&1 | grep 'Legacy lead-out at' | sed 's/.\+=//'`
+  if [ -z "$dvdsize" ]; then
+    wait_msg "Step 1: no blank dvd detected. please insert a blank dvd or cntl-c to stop ..."
+  fi
+
+  dvdid=dvd-$(cat /proc/sys/kernel/random/uuid)
+  echo "Step 2: searching files not yet on dvds ..."
+  if git annex find --not --metadata dvd=skip --format='${bytesize} ./${file}\n' | dirsplit --size $dvdsize --prefix ${dvdid}_ -T- > /dev/null 2>&1; then
+    echo "Step 2: found files to be added to dvds..."
+  else
+    echo "Step 2: no file found. all files are on dvds."
+    break
+  fi
+
+  echo "Step 3: creating dvd temp dir..."
+  mkdir $dvdid
+  spanfile=${dvdid}_1.list
+  dvdiso=$dvdid/$spanfile.iso
+  dvddir=$dvdid/$spanfile.dvd
+  dvdisomount=$dvdid/$spanfile.mount
+  dvdgitdir=$dvddir/$dvdid
+  dvdpath=/mnt/cdrom
+
+  echo "Step 4: creating iso of files from catalog..."
+  mkisofs -D -r -iso-level 3 -J -joliet-long -graft-points -rock -input-charset utf-8 -o $dvdiso -f -path-list $spanfile
+  echo "Step 5: mounting iso..."
+  mkdir $dvdisomount
+  mount $dvdiso $dvdisomount
+  echo "Step 6: adding git to iso..."
+  git init $dvdgitdir
+  rsync -ra $dvdisomount/ $dvdgitdir/
+  umount $dvdisomount 
+  cd $dvdgitdir
+  git annex init "$dvdid" --quiet
+  git annex add --quiet .
+  git commit --quiet -m "initial $dvdid"
+  git annex direct --quiet
+  cd -
+  echo "Step 7: creating final iso to burn..."
+  mkisofs -iso-level 3 -J -joliet-long -rock -input-charset utf-8 -o $dvdiso $dvddir
+  echo "Step 8: burning iso ..."
+  #cdrecord -v -dao $dvdiso
+
+  echo "Step 9: go back to master branch ..."
+  git checkout master
+
+  echo "Step 10: mounting dvd to be added as remote..."
+  mount $dvdiso $dvdpath
+  echo "Step 11: adding remote $dvdid $dvdpath/$dvdid to repo..."
+  git remote add $dvdid $dvdpath/$dvdid
+  echo "Step 12: fetching remote $dvdid ..."
+  git fetch $dvdid
+  echo "Step 13: making remote $dvdid read-only..."
+  git config --local remote.$dvdid.annex-readonly true
+  git annex sync
+  echo "Step 14: unmounting $dvdpath..."
+  umount $dvdpath
+  echo "Step 15: dvd $dvdid created successfully. please mark this dvd as $dvdid for easy retrieval."
+  git annex metadata --quiet --in $dvdid --set dvd=skip --force
+  echo "Step 16: cleaning up..."
+  rm -rf $dvdid $spanfile
+  git checkout master > /dev/null 2>&1
+done
+
+git checkout master > /dev/null 2>&1
+echo "done"
