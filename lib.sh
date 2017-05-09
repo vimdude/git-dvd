@@ -62,6 +62,7 @@ gitdvd_create() {
       sleep 2
     done
 
+    gitdvd_info_msg "checking for files to burn on dvds ..."
     gitdvd_checkfiles $tracksize
 
     gitdvd_info_msg "creating dvd temp dir $dvdid ..."
@@ -85,8 +86,10 @@ gitdvd_create() {
     git fetch $dvdid > /dev/null 2>&1
     git prune
 
-    gitdvd_info_msg "copying files to remote $dvdid ..."
+    gitdvd_info_msg "copying files not yet on dvd to remote $dvdid ..."
     ( git annex copy --to $dvdid --not --metadata dvd=skip > /dev/null 2>&1 ) & wait
+    # TODO: copy everything else to fill the remaining space. Check disk space first
+    # ( git annex copy --to $dvdid > /dev/null 2>&1 ) & wait
     rm -f $overheadfile
     gitdvd_info_msg "recreating symlinks on $dvdid ..."
     git annex find --in $dvdid | rsync -lR --files-from - . $dvdpath/$dvdid
