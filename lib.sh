@@ -9,11 +9,6 @@
 
 set -e
 
-gitdvd_wait_msg() {
-  echo "git-dvd: $1" 
-  sleep 2
-}
-
 gitdvd_info_msg() {
   echo "git-dvd: $1" 
 }
@@ -33,7 +28,7 @@ gitdvd_checkfiles() {
     else
       gitdvd_info_msg "file $filepath larger than track size. skipped"
     fi
-  done < <(git annex find --in=here --not --metadata dvd=skip --format='filesize=${bytesize} filepath=${file}\n' )
+  done < <(git annex find --in=here --not --metadata dvd=skip --format='filesize="${bytesize}" filepath="${file}"\n' )
   gitdvd_bail_out "no file to burn on dvd"
   exit
 }
@@ -59,13 +54,13 @@ gitdvd_create() {
     dvdgitdir=$dvdpath/$dvdid
     overheadfile=$dvdpath/.gitdvd
     overheadsize=10 # megabytes
+    tracksize=""
 
-    gitdvd_info_msg "getting track size for next dvd"
-    tracksize=`cdrwtool -i -d /dev/sr0 2>&1 | grep track_size | sed 's/.*(\([^)]\+\).*/\1/'`
-    if [ -z "$tracksize" ]; then
-      gitdvd_wait_msg "no blank dvd detected. please insert a blank dvd or cntl-c to stop ..."
-      continue
-    fi
+    gitdvd_info_msg "please insert a blank dvd or cntl-c to stop ..."
+    until [ ! -z "$tracksize" ]; do
+      tracksize=`cdrwtool -i -d /dev/sr0 2>&1 | grep track_size | sed 's/.*(\([^)]\+\).*/\1/'`
+      sleep 2
+    done
 
     gitdvd_checkfiles $tracksize
 
