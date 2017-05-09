@@ -57,6 +57,8 @@ gitdvd_create() {
 		dvdudf=$dvdtmpdir/udf
 		dvdpath=/mnt/cdrom
 		dvdgitdir=$dvdpath/$dvdid
+    overheadfile=$dvdpath/.gitdvd
+    overheadsize=10 # megabytes
 
 		gitdvd_info_msg "getting track size for next dvd"
 		tracksize=`cdrwtool -i -d /dev/sr0 2>&1 | grep track_size | sed 's/.*(\([^)]\+\).*/\1/'`
@@ -76,27 +78,29 @@ gitdvd_create() {
 		mount -oloop,rw $dvdudf $dvdpath
 		git init --quiet $dvdgitdir
 		cd $dvdgitdir
+    dd if=/dev/zero of=$overheadfile bs=1M count=$overheadsize
 		git annex init --quiet "$dvdid"
 		git annex upgrade --quiet
 		cd - > /dev/null
-
-		gitdvd_sync_files "$dvdgitdir"
-		gitdvd_annex_files "$dvdgitdir" "$dvdid"
 
 		gitdvd_info_msg "adding remote $dvdid $dvdpath/$dvdid to repo..."
 		git remote add $dvdid $dvdpath/$dvdid
 
 		gitdvd_info_msg "fetching remote $dvdid ..."
-		git fetch $dvdid
+		git fetch $dvdid > /dev/null 2>&1
+    git prune
+
+		gitdvd_info_msg "copying files to remote $dvdid ..."
+    ( git annex copy --to $dvdid --not --metadata dvd=skip > /dev/null 2>&1 ) & wait
+    rm -f $overheadfile
+		gitdvd_info_msg "recreating symlinks on $dvdid ..."
+    git annex find --in $dvdid | rsync -lR --files-from - . $dvdpath/$dvdid
 
 		gitdvd_info_msg "making remote $dvdid read-only..."
 		git config --local remote.$dvdid.annex-readonly true
-		git annex sync
+		git annex sync --quiet
 
-		# to fix location logs so that git annex whereis works
-		gitdvd_info_msg "running git annex fsck ..."
-		git annex fsck --quiet --fast --from $dvdid
-
+		gitdvd_info_msg "changing metadata of files in $dvdid ..."
 		git annex metadata --quiet --in $dvdid --set dvd=skip --force
 
 		gitdvd_info_msg "unmounting $dvdpath..."
@@ -112,62 +116,6 @@ gitdvd_create() {
 	done
 
 	gitdvd_info_msg "done"
-}
-
-gitdvd_annex_files() {
-  dvdgitdir=$1
-  dvdid=$2
-  (
-  cd $dvdgitdir
-  while true; do
-    git annex add --quiet --include-dotfiles > /dev/null 2>&1 || {
-      file=`git ls-files --other | tail -n 1`
-      if [ ! -z "$file" ]; then
-        rm -f "$file"
-        continue
-      fi
-    }
-    break
-  done
-  while true; do
-    git commit -m "initial $dvdid" > /dev/null 2>&1 || {
-      file=`git ls-files --cached | tail -n 1`
-      if [ ! -z "$file" ]; then
-        link=`readlink $file | sed 's/^.*.git/.git/'`
-        # free space
-        echo > $link
-        git annex drop --force $file > /dev/null 2>&1 || true
-        rm -f "$file" || true
-        git rm --cached "$file" > /dev/null 2>&1 || true
-        continue
-      fi
-    }
-    break
-  done
-  cd - > /dev/null
-  ) &
-  wait
-}
-
-gitdvd_sync_files() {
-  (
-  dvdgitdir=$1
-  nofile=true
-  while read file; do
-    rsync -aRL "$file" $dvdgitdir > /dev/null 2>&1
-    if [ "$?" -eq "0" ]; then
-      # file ok, get next
-      nofile=false
-      continue
-    elif [ "$?" -eq "11" ]; then
-      # dvd is full, ready to annex
-      break
-    else
-      gitdvd_bail_out "sync files with rsync failed"
-    fi
-  done < <(git annex find --in=here --not --metadata dvd=skip)
-  ) &
-  wait
 }
 
 gitdvd_startover() {
